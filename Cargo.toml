@@ -24,7 +24,8 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 [dev-dependencies]
 hex-literal = "0.3"
 rand = "0.8"
-
+aes-gcm = "0.10.1"
+rustc-hex = "2"
 [features]
 default = ["std"]
 with-codec = ["codec", "scale-info", "ethereum-types/codec"]

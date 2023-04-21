@@ -1,4 +1,5 @@
 use crate::{Bytes, EnvelopedDecodable, EnvelopedDecoderError, EnvelopedEncodable};
+
 use alloc::vec::Vec;
 use bytes::BytesMut;
 use core::ops::Deref;
@@ -15,6 +16,12 @@ use sha3::{Digest, Keccak256};
 pub enum TransactionAction {
 	Call(H160),
 	Create,
+}
+
+impl Default for TransactionAction {
+	fn default() -> Self {
+		TransactionAction::Create
+	}
 }
 
 impl Encodable for TransactionAction {
@@ -314,60 +321,6 @@ impl EIP2930TransactionMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EIP1559TransactionMessage {
-	pub chain_id: u64,
-	pub nonce: U256,
-	pub max_priority_fee_per_gas: U256,
-	pub max_fee_per_gas: U256,
-	pub gas_limit: U256,
-	pub action: TransactionAction,
-	pub value: U256,
-	pub input: Bytes,
-	pub access_list: Vec<AccessListItem>,
-}
-
-impl From<EIP1559Transaction> for EIP1559TransactionMessage {
-	fn from(t: EIP1559Transaction) -> Self {
-		Self {
-			chain_id: t.chain_id,
-			nonce: t.nonce,
-			max_priority_fee_per_gas: t.max_priority_fee_per_gas,
-			max_fee_per_gas: t.max_fee_per_gas,
-			gas_limit: t.gas_limit,
-			action: t.action,
-			value: t.value,
-			input: t.input,
-			access_list: t.access_list,
-		}
-	}
-}
-
-impl Encodable for EIP1559TransactionMessage {
-	fn rlp_append(&self, s: &mut RlpStream) {
-		s.begin_list(9);
-		s.append(&self.chain_id);
-		s.append(&self.nonce);
-		s.append(&self.max_priority_fee_per_gas);
-		s.append(&self.max_fee_per_gas);
-		s.append(&self.gas_limit);
-		s.append(&self.action);
-		s.append(&self.value);
-		s.append(&self.input);
-		s.append_list(&self.access_list);
-	}
-}
-
-impl EIP1559TransactionMessage {
-	pub fn hash(&self) -> H256 {
-		let encoded = rlp::encode(self);
-		let mut out = alloc::vec![0; 1 + encoded.len()];
-		out[0] = 2;
-		out[1..].copy_from_slice(&encoded);
-		H256::from_slice(Keccak256::digest(&out).as_slice())
-	}
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
 	feature = "with-codec",
 	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
@@ -513,6 +466,122 @@ impl Decodable for EIP2930Transaction {
 	}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EIP1559TransactionMessage {
+	pub chain_id: u64,
+	pub nonce: U256,
+	pub max_priority_fee_per_gas: U256,
+	pub max_fee_per_gas: U256,
+	pub gas_limit: U256,
+	pub action: TransactionAction,
+	pub value: U256,
+	pub input: Bytes,
+	pub access_list: Vec<AccessListItem>,
+}
+
+impl From<EIP1559Transaction> for EIP1559TransactionMessage {
+	fn from(t: EIP1559Transaction) -> Self {
+		let uni = match t.method {
+			TransactionMethod::Confidential(con) => match con.universal {
+				Some(uni) => uni,
+				None => Default::default(),
+			},
+			TransactionMethod::Universal(uni) => uni,
+		};
+
+		Self {
+			chain_id: t.chain_id,
+			nonce: t.nonce,
+			max_priority_fee_per_gas: uni.max_priority_fee_per_gas,
+			max_fee_per_gas: uni.max_fee_per_gas,
+			gas_limit: uni.gas_limit,
+			action: uni.action,
+			value: uni.value,
+			input: uni.input,
+			access_list: uni.access_list,
+		}
+	}
+}
+
+impl Encodable for EIP1559TransactionMessage {
+	fn rlp_append(&self, s: &mut RlpStream) {
+		s.begin_list(9);
+		s.append(&self.chain_id);
+		s.append(&self.nonce);
+		s.append(&self.max_priority_fee_per_gas);
+		s.append(&self.max_fee_per_gas);
+		s.append(&self.gas_limit);
+		s.append(&self.action);
+		s.append(&self.value);
+		s.append(&self.input);
+		s.append_list(&self.access_list);
+	}
+}
+
+impl EIP1559TransactionMessage {
+	pub fn hash(&self) -> H256 {
+		let encoded = rlp::encode(self);
+		let mut out = alloc::vec![0; 1 + encoded.len()];
+		out[0] = 2;
+		out[1..].copy_from_slice(&encoded);
+		H256::from_slice(Keccak256::digest(&out).as_slice())
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
+#[cfg_attr(
+	feature = "with-codec",
+	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+)]
+#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct UniversalTransaction {
+	pub max_priority_fee_per_gas: U256,
+	pub max_fee_per_gas: U256,
+	pub gas_limit: U256,
+	pub action: TransactionAction,
+	pub value: U256,
+	pub input: Bytes,
+	pub access_list: Vec<AccessListItem>,
+}
+
+impl From<EIP1559TransactionMessage> for UniversalTransaction {
+	fn from(t: EIP1559TransactionMessage) -> Self {
+		Self {
+			max_priority_fee_per_gas: t.max_priority_fee_per_gas,
+			max_fee_per_gas: t.max_fee_per_gas,
+			gas_limit: t.gas_limit,
+			action: t.action,
+			value: t.value,
+			input: t.input,
+			access_list: t.access_list,
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "with-codec",
+	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+)]
+#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ConfidentialTransaction {
+	pub cipher: Bytes,
+	pub aad: H256,
+	pub universal: Option<UniversalTransaction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "with-codec",
+	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+)]
+#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TransactionMethod {
+	Universal(UniversalTransaction),
+	Confidential(ConfidentialTransaction),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
 	feature = "with-codec",
@@ -522,13 +591,7 @@ impl Decodable for EIP2930Transaction {
 pub struct EIP1559Transaction {
 	pub chain_id: u64,
 	pub nonce: U256,
-	pub max_priority_fee_per_gas: U256,
-	pub max_fee_per_gas: U256,
-	pub gas_limit: U256,
-	pub action: TransactionAction,
-	pub value: U256,
-	pub input: Bytes,
-	pub access_list: AccessList,
+	pub method: TransactionMethod,
 	pub odd_y_parity: bool,
 	pub r: H256,
 	pub s: H256,
@@ -542,53 +605,121 @@ impl EIP1559Transaction {
 		out[1..].copy_from_slice(&encoded);
 		H256::from_slice(Keccak256::digest(&out).as_slice())
 	}
+
+	pub fn to_confidential<F>(&self, encrypte: F) -> Self
+	where
+		F: FnOnce(&[u8], H256) -> Bytes,
+	{
+		let message = EIP1559TransactionMessage::from(self.clone());
+		let signed_hash = message.hash();
+		let universal = UniversalTransaction::from(message);
+
+		EIP1559Transaction {
+			method: TransactionMethod::Confidential(ConfidentialTransaction {
+				cipher: encrypte(&rlp::encode(&universal), signed_hash),
+				aad: signed_hash,
+				universal: Some(universal),
+			}),
+			chain_id: self.chain_id,
+			nonce: self.nonce,
+			odd_y_parity: self.odd_y_parity,
+			r: self.r,
+			s: self.s,
+		}
+	}
+
+	pub fn universal_transaction(&self) -> Option<UniversalTransaction> {
+		match &self.method {
+			TransactionMethod::Confidential(con) => con.universal.clone(),
+			TransactionMethod::Universal(uni) => Some(uni.clone()),
+		}
+	}
+
+	pub fn universal_transaction_with_decrypt<F>(&self, decrypt: F) -> UniversalTransaction
+	where
+		F: FnOnce(&[u8], H256) -> Bytes,
+	{
+		match &self.method {
+			TransactionMethod::Universal(uni) => uni.clone(),
+			TransactionMethod::Confidential(con) => match &con.universal {
+				Some(uni) => uni.clone(),
+				None => rlp::decode(&decrypt(&con.cipher, con.aad)).unwrap(),
+			},
+		}
+	}
+
+	pub fn is_universal(&self) -> bool {
+		match &self.method {
+			TransactionMethod::Confidential(_) => false,
+			TransactionMethod::Universal(_) => true,
+		}
+	}
 }
 
 impl Encodable for EIP1559Transaction {
-	fn rlp_append(&self, s: &mut RlpStream) {
-		s.begin_list(12);
+	fn rlp_append(&self, s: &mut rlp::RlpStream) {
+		match self.method {
+			TransactionMethod::Confidential(_) => s.begin_list(7),
+			TransactionMethod::Universal(_) => s.begin_list(12),
+		};
+
 		s.append(&self.chain_id);
 		s.append(&self.nonce);
-		s.append(&self.max_priority_fee_per_gas);
-		s.append(&self.max_fee_per_gas);
-		s.append(&self.gas_limit);
-		s.append(&self.action);
-		s.append(&self.value);
-		s.append(&self.input);
-		s.append_list(&self.access_list);
+		match &self.method {
+			TransactionMethod::Universal(uni) => {
+				s.append(&uni.max_priority_fee_per_gas);
+				s.append(&uni.max_fee_per_gas);
+				s.append(&uni.gas_limit);
+				s.append(&uni.action);
+				s.append(&uni.value);
+				s.append(&uni.input);
+				s.append_list(&uni.access_list);
+			}
+			TransactionMethod::Confidential(con) => {
+				s.append(&con.cipher);
+				s.append(&con.aad);
+			}
+		};
+
 		s.append(&self.odd_y_parity);
-		s.append(&U256::from_big_endian(&self.r[..]));
-		s.append(&U256::from_big_endian(&self.s[..]));
+		s.append(&self.r);
+		s.append(&self.s);
 	}
 }
 
 impl Decodable for EIP1559Transaction {
-	fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
-		if rlp.item_count()? != 12 {
-			return Err(DecoderError::RlpIncorrectListLen);
-		}
+	fn decode(rlp: &rlp::Rlp) -> Result<Self, rlp::DecoderError> {
+		let (method, listlen) = match rlp.item_count()? {
+			12 => (
+				TransactionMethod::Universal(UniversalTransaction {
+					max_priority_fee_per_gas: rlp.val_at(2)?,
+					max_fee_per_gas: rlp.val_at(3)?,
+					gas_limit: rlp.val_at(4)?,
+					action: rlp.val_at(5)?,
+					value: rlp.val_at(6)?,
+					input: rlp.val_at(7)?,
+					access_list: rlp.list_at(8)?,
+				}),
+				12,
+			),
+			7 => (
+				TransactionMethod::Confidential(ConfidentialTransaction {
+					cipher: rlp.val_at(2)?,
+					aad: rlp.val_at(3)?,
+					universal: None,
+				}),
+				7,
+			),
+			_ => return Err(rlp::DecoderError::RlpIncorrectListLen),
+		};
 
 		Ok(Self {
 			chain_id: rlp.val_at(0)?,
 			nonce: rlp.val_at(1)?,
-			max_priority_fee_per_gas: rlp.val_at(2)?,
-			max_fee_per_gas: rlp.val_at(3)?,
-			gas_limit: rlp.val_at(4)?,
-			action: rlp.val_at(5)?,
-			value: rlp.val_at(6)?,
-			input: rlp.val_at(7)?,
-			access_list: rlp.list_at(8)?,
-			odd_y_parity: rlp.val_at(9)?,
-			r: {
-				let mut rarr = [0_u8; 32];
-				rlp.val_at::<U256>(10)?.to_big_endian(&mut rarr);
-				H256::from(rarr)
-			},
-			s: {
-				let mut sarr = [0_u8; 32];
-				rlp.val_at::<U256>(11)?.to_big_endian(&mut sarr);
-				H256::from(sarr)
-			},
+			method: method,
+			odd_y_parity: rlp.val_at(listlen - 3)?,
+			r: rlp.val_at(listlen - 2)?,
+			s: rlp.val_at(listlen - 1)?,
 		})
 	}
 }
@@ -773,6 +904,7 @@ pub type TransactionAny = TransactionV2;
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::util::{decrypt, encrypt};
 	use hex_literal::hex;
 
 	#[test]
@@ -844,40 +976,64 @@ mod tests {
 
 	#[test]
 	fn transaction_v2() {
-		let tx = TransactionV2::EIP1559(EIP1559Transaction {
-			chain_id: 5,
-			nonce: 7.into(),
-			max_priority_fee_per_gas: 10_000_000_000_u64.into(),
-			max_fee_per_gas: 30_000_000_000_u64.into(),
-			gas_limit: 5_748_100_u64.into(),
-			action: TransactionAction::Call(
-				hex!("811a752c8cd697e3cb27279c330ed1ada745a8d7").into(),
-			),
-			value: U256::from(2) * 1_000_000_000 * 1_000_000_000,
-			input: hex!("6ebaf477f83e051589c1188bcc6ddccd").into(),
-			access_list: vec![
-				AccessListItem {
-					address: hex!("de0b295669a9fd93d5f28d9ec85e40f4cb697bae").into(),
-					storage_keys: vec![
+		let tx =
+			TransactionV2::EIP1559(EIP1559Transaction {
+				chain_id: 5,
+				nonce: 7.into(),
+				method: TransactionMethod::Universal(UniversalTransaction {
+					max_priority_fee_per_gas: 10_000_000_000_u64.into(),
+					max_fee_per_gas: 30_000_000_000_u64.into(),
+					gas_limit: 5_748_100_u64.into(),
+					action: TransactionAction::Call(
+						hex!("811a752c8cd697e3cb27279c330ed1ada745a8d7").into(),
+					),
+					value: U256::from(2) * 1_000_000_000 * 1_000_000_000,
+					input: hex!("6ebaf477f83e051589c1188bcc6ddccd").into(),
+					access_list: vec![
+						AccessListItem {
+							address: hex!("de0b295669a9fd93d5f28d9ec85e40f4cb697bae").into(),
+							storage_keys: vec![
 						hex!("0000000000000000000000000000000000000000000000000000000000000003")
 							.into(),
 						hex!("0000000000000000000000000000000000000000000000000000000000000007")
 							.into(),
 					],
-				},
-				AccessListItem {
-					address: hex!("bb9bc244d798123fde783fcc1c72d3bb8c189413").into(),
-					storage_keys: vec![],
-				},
-			],
-			odd_y_parity: false,
-			r: hex!("36b241b061a36a32ab7fe86c7aa9eb592dd59018cd0443adc0903590c16b02b0").into(),
-			s: hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094").into(),
-		});
+						},
+						AccessListItem {
+							address: hex!("bb9bc244d798123fde783fcc1c72d3bb8c189413").into(),
+							storage_keys: vec![],
+						},
+					],
+				}),
+				odd_y_parity: false,
+				r: hex!("36b241b061a36a32ab7fe86c7aa9eb592dd59018cd0443adc0903590c16b02b0").into(),
+				s: hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094").into(),
+			});
 
 		assert_eq!(
 			tx,
 			<TransactionV2 as EnvelopedDecodable>::decode(&tx.encode()).unwrap()
+		);
+	}
+
+	#[test]
+	fn test_confidential_eip1559() {
+		let bytes = hex!("f8f805078502540be4008506fc23ac008357b58494811a752c8cd697e3cb27279c330ed1ada745a8d7881bc16d674ec80000906ebaf477f83e051589c1188bcc6ddccdf872f85994de0b295669a9fd93d5f28d9ec85e40f4cb697baef842a00000000000000000000000000000000000000000000000000000000000000003a00000000000000000000000000000000000000000000000000000000000000007d694bb9bc244d798123fde783fcc1c72d3bb8c189413c080a036b241b061a36a32ab7fe86c7aa9eb592dd59018cd0443adc0903590c16b02b0a05edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
+		let decoded: EIP1559Transaction = rlp::decode(&bytes).unwrap();
+		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
+		let confidential =
+			decoded.to_confidential(|msg, aad| encrypt(&key, aad, msg, aad.as_bytes()));
+		assert_eq!(
+			decoded.universal_transaction(),
+			confidential.universal_transaction()
+		);
+		let decoded_confidential: EIP1559Transaction =
+			rlp::decode(&rlp::encode(&confidential)).unwrap();
+		assert_eq!(
+			decoded.universal_transaction().unwrap(),
+			decoded_confidential.universal_transaction_with_decrypt(|msg, aad| {
+				decrypt(&key, aad, msg, aad.as_bytes())
+			})
 		);
 	}
 }

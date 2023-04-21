@@ -1,5 +1,10 @@
 //! Utility functions for Ethereum.
 
+#[cfg(test)]
+use aes_gcm::{
+	aead::{AeadMut, Payload},
+	Aes256Gcm, KeyInit, Nonce,
+};
 use ethereum_types::H256;
 use hash256_std_hasher::Hash256StdHasher;
 use hash_db::Hasher;
@@ -47,4 +52,26 @@ where
 	V: AsRef<[u8]>,
 {
 	triehash::ordered_trie_root::<KeccakHasher, I>(input)
+}
+
+#[cfg(test)]
+pub fn encrypt(key: &[u8], nonce: H256, msg: &[u8], aad: &[u8]) -> Vec<u8> {
+	Aes256Gcm::new_from_slice(key)
+		.unwrap()
+		.encrypt(
+			Nonce::from_slice(&nonce.as_fixed_bytes()[20..]),
+			Payload { aad, msg },
+		)
+		.unwrap()
+}
+
+#[cfg(test)]
+pub fn decrypt(key: &[u8], nonce: H256, msg: &[u8], aad: &[u8]) -> Vec<u8> {
+	Aes256Gcm::new_from_slice(key)
+		.unwrap()
+		.decrypt(
+			Nonce::from_slice(&nonce.as_fixed_bytes()[20..]),
+			Payload { aad, msg },
+		)
+		.unwrap()
 }
