@@ -904,7 +904,7 @@ pub type TransactionAny = TransactionV2;
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::util::{decrypt, encrypt};
+	use crate::util::{decrypt, encrypt, recover_signer};
 	use hex_literal::hex;
 
 	#[test]
@@ -1018,21 +1018,46 @@ mod tests {
 
 	#[test]
 	fn test_confidential_eip1559() {
-		let bytes = hex!("f8f805078502540be4008506fc23ac008357b58494811a752c8cd697e3cb27279c330ed1ada745a8d7881bc16d674ec80000906ebaf477f83e051589c1188bcc6ddccdf872f85994de0b295669a9fd93d5f28d9ec85e40f4cb697baef842a00000000000000000000000000000000000000000000000000000000000000003a00000000000000000000000000000000000000000000000000000000000000007d694bb9bc244d798123fde783fcc1c72d3bb8c189413c080a036b241b061a36a32ab7fe86c7aa9eb592dd59018cd0443adc0903590c16b02b0a05edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
-		let decoded: EIP1559Transaction = rlp::decode(&bytes).unwrap();
-		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
-		let confidential =
-			decoded.to_confidential(|msg, aad| encrypt(&key, aad, msg, aad.as_bytes()));
+		let tx = EIP1559Transaction {
+			chain_id: 42,
+			nonce: 0.into(),
+			method: TransactionMethod::Universal(UniversalTransaction {
+				max_priority_fee_per_gas: 1500000000_u64.into(),
+				max_fee_per_gas: 2419170048_u64.into(),
+				gas_limit: 21000_u64.into(),
+				action: TransactionAction::Call(
+					hex!("aad03e7b72eb75ef0771daa9fc5cf380176441c2").into(),
+				),
+				value: 100000000000000000000_u128.into(),
+				input: Default::default(),
+				access_list: Default::default(),
+			}),
+			odd_y_parity: false,
+			r: hex!("eaab5690479f5baf19083128079eeb0ee1a37cf759fac918f5db6497c765cb40").into(),
+			s: hex!("0ee31ec7a954e49e63af2dafdfc975c41cc51c64d65f29b1db793025bbf8e6b9").into(),
+		};
+		let pubkey = recover_signer(&TransactionV2::EIP1559(tx.clone()));
+		let from = Address::from(H256::from_slice(Keccak256::digest(&pubkey).as_slice()));
 		assert_eq!(
-			decoded.universal_transaction(),
+			from,
+			hex!("3e4b57a3b06903ebf2184e010cd96fdff24b2a39").into()
+		);
+		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
+
+		let confidential =
+			tx.to_confidential(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()));
+
+		assert_eq!(
+			tx.universal_transaction(),
 			confidential.universal_transaction()
 		);
 		let decoded_confidential: EIP1559Transaction =
 			rlp::decode(&rlp::encode(&confidential)).unwrap();
+
 		assert_eq!(
-			decoded.universal_transaction().unwrap(),
+			tx.universal_transaction().unwrap(),
 			decoded_confidential.universal_transaction_with_decrypt(|msg, aad| {
-				decrypt(&key, aad, msg, aad.as_bytes())
+				decrypt(&key, &pubkey, aad, msg, aad.as_bytes())
 			})
 		);
 	}
