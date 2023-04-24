@@ -829,6 +829,24 @@ impl TransactionV2 {
 			TransactionV2::EIP1559(t) => t.hash(),
 		}
 	}
+
+	pub fn to_confidential<F>(&self, encrypte: F) -> Self
+	where
+		F: FnOnce(&[u8], H256) -> Bytes,
+	{
+		match self {
+			TransactionV2::EIP1559(t) => TransactionV2::EIP1559(t.to_confidential(encrypte)),
+			TransactionV2::EIP2930(t) => TransactionV2::EIP2930(t.clone()),
+			TransactionV2::Legacy(t) => TransactionV2::Legacy(t.clone()),
+		}
+	}
+
+	pub fn is_universal(&self) -> bool {
+		match self {
+			TransactionV2::EIP1559(t) => t.is_universal(),
+			_ => true,
+		}
+	}
 }
 
 impl EnvelopedEncodable for TransactionV2 {
@@ -1018,7 +1036,7 @@ mod tests {
 
 	#[test]
 	fn test_confidential_eip1559() {
-		let tx = EIP1559Transaction {
+		let tx = TransactionV2::EIP1559(EIP1559Transaction {
 			chain_id: 42,
 			nonce: 0.into(),
 			method: TransactionMethod::Universal(UniversalTransaction {
@@ -1035,8 +1053,8 @@ mod tests {
 			odd_y_parity: false,
 			r: hex!("eaab5690479f5baf19083128079eeb0ee1a37cf759fac918f5db6497c765cb40").into(),
 			s: hex!("0ee31ec7a954e49e63af2dafdfc975c41cc51c64d65f29b1db793025bbf8e6b9").into(),
-		};
-		let pubkey = recover_signer(&TransactionV2::EIP1559(tx.clone()));
+		});
+		let pubkey = recover_signer(&tx);
 		let from = Address::from(H256::from_slice(Keccak256::digest(&pubkey).as_slice()));
 		assert_eq!(
 			from,
@@ -1047,16 +1065,36 @@ mod tests {
 		let confidential =
 			tx.to_confidential(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()));
 
+		assert!(!confidential.is_universal());
+
+		let tx = match tx {
+			TransactionV2::EIP1559(tx) => Some(tx),
+			_ => None,
+		}
+		.unwrap();
+
+		let tx_confidential = match confidential.clone() {
+			TransactionV2::EIP1559(tx) => Some(tx),
+			_ => None,
+		}
+		.unwrap();
 		assert_eq!(
 			tx.universal_transaction(),
-			confidential.universal_transaction()
+			tx_confidential.universal_transaction()
 		);
-		let decoded_confidential: EIP1559Transaction =
-			rlp::decode(&rlp::encode(&confidential)).unwrap();
+
+		let decoded_confidential: TransactionV2 =
+			TransactionV2::decode(&TransactionV2::encode(&confidential)).unwrap();
+
+		let tx_confidential = match decoded_confidential {
+			TransactionV2::EIP1559(tx) => Some(tx),
+			_ => None,
+		}
+		.unwrap();
 
 		assert_eq!(
 			tx.universal_transaction().unwrap(),
-			decoded_confidential.universal_transaction_with_decrypt(|msg, aad| {
+			tx_confidential.universal_transaction_with_decrypt(|msg, aad| {
 				decrypt(&key, &pubkey, aad, msg, aad.as_bytes())
 			})
 		);
