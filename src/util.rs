@@ -5,6 +5,10 @@ use aes_gcm::{
 	aead::{AeadMut, Payload},
 	Aes256Gcm, KeyInit, Nonce,
 };
+
+#[cfg(test)]
+use crate::Error;
+
 use ethereum_types::H256;
 use hash256_std_hasher::Hash256StdHasher;
 use hash_db::Hasher;
@@ -55,43 +59,62 @@ where
 }
 
 #[cfg(test)]
-pub fn encrypt(key: &[u8], pubkey: &[u8; 64], nonce: H256, msg: &[u8], aad: &[u8]) -> Vec<u8> {
-	let shared_key = shared_secret(key, pubkey).unwrap();
-	Aes256Gcm::new_from_slice(&shared_key)
-		.unwrap()
+pub fn encrypt(
+	key: &[u8],
+	pubkey: &[u8; 64],
+	nonce: H256,
+	msg: &[u8],
+	aad: &[u8],
+) -> Result<Vec<u8>, Error> {
+	let shared_key = shared_secret(key, pubkey)?;
+	Ok(Aes256Gcm::new_from_slice(&shared_key)
+		.map_err(|_| Error::InvalidKeyLength)?
 		.encrypt(
 			Nonce::from_slice(&nonce.as_fixed_bytes()[20..]),
 			Payload { aad, msg },
 		)
-		.unwrap()
+		.map_err(|_| Error::BadEncrypte)?)
 }
 
 #[cfg(test)]
-pub fn decrypt(key: &[u8], pubkey: &[u8; 64], nonce: H256, msg: &[u8], aad: &[u8]) -> Vec<u8> {
-	let shared_key = shared_secret(key, pubkey).unwrap();
-	Aes256Gcm::new_from_slice(&shared_key)
-		.unwrap()
+pub fn decrypt(
+	key: &[u8],
+	pubkey: &[u8; 64],
+	nonce: H256,
+	msg: &[u8],
+	aad: &[u8],
+) -> Result<Vec<u8>, Error> {
+	let shared_key = shared_secret(key, pubkey)?;
+	Ok(Aes256Gcm::new_from_slice(&shared_key)
+		.map_err(|_| Error::InvalidKeyLength)?
 		.decrypt(
 			Nonce::from_slice(&nonce.as_fixed_bytes()[20..]),
 			Payload { aad, msg },
 		)
-		.unwrap()
+		.map_err(|_| Error::BadDecrypte)?)
 }
 
 #[cfg(test)]
-fn shared_secret(key: &[u8], pubkey: &[u8; 64]) -> Result<[u8; 32], secp256k1::Error> {
+fn shared_secret(key: &[u8], pubkey: &[u8; 64]) -> Result<[u8; 32], Error> {
 	use secp256k1::{ecdh::SharedSecret, PublicKey, SecretKey};
 
 	let mut tagged_full = [0u8; 65];
 	tagged_full[0] = 0x04;
 	tagged_full[1..].copy_from_slice(pubkey);
 
-	let sk = SecretKey::from_slice(key)?;
-	Ok(SharedSecret::new(&PublicKey::from_slice(&tagged_full)?, &sk).secret_bytes())
+	let sk = SecretKey::from_slice(key).map_err(|_| Error::BadSecretKey)?;
+	Ok(SharedSecret::new(
+		&PublicKey::from_slice(&tagged_full).map_err(|_| Error::BadPublicKey)?,
+		&sk,
+	)
+	.secret_bytes())
 }
 
 #[cfg(test)]
-fn secp256k1_ecdsa_recover(sig: &[u8; 65], msg: &[u8; 32]) -> Result<[u8; 64], secp256k1::Error> {
+pub fn secp256k1_ecdsa_recover(
+	sig: &[u8; 65],
+	msg: &[u8; 32],
+) -> Result<[u8; 64], secp256k1::Error> {
 	use secp256k1::{
 		ecdsa::{RecoverableSignature, RecoveryId},
 		Message, SECP256K1,

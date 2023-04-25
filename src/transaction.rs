@@ -571,6 +571,18 @@ pub struct ConfidentialTransaction {
 	pub universal: Option<UniversalTransaction>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Error {
+	BadEncrypte,
+	BadDecrypte,
+	InvalidKeyLength,
+	InvalidRlpDecode,
+	/// Invalid secret key
+	BadSecretKey,
+	/// Invalid  public key
+	BadPublicKey,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
 	feature = "with-codec",
@@ -606,7 +618,7 @@ impl EIP1559Transaction {
 		H256::from_slice(Keccak256::digest(&out).as_slice())
 	}
 
-	pub fn to_confidential<F>(&self, encrypte: F) -> Self
+	pub fn encrypt<F>(&self, encrypte: F) -> Self
 	where
 		F: FnOnce(&[u8], H256) -> Bytes,
 	{
@@ -618,7 +630,7 @@ impl EIP1559Transaction {
 			method: TransactionMethod::Confidential(ConfidentialTransaction {
 				cipher: encrypte(&rlp::encode(&universal), signed_hash),
 				aad: signed_hash,
-				universal: Some(universal),
+				universal: None,
 			}),
 			chain_id: self.chain_id,
 			nonce: self.nonce,
@@ -635,15 +647,35 @@ impl EIP1559Transaction {
 		}
 	}
 
-	pub fn universal_transaction_with_decrypt<F>(&self, decrypt: F) -> UniversalTransaction
+	pub fn decrypt<F>(&self, decrypt: F) -> Result<Self, Error>
 	where
-		F: FnOnce(&[u8], H256) -> Bytes,
+		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
 		match &self.method {
-			TransactionMethod::Universal(uni) => uni.clone(),
+			TransactionMethod::Universal(_) => Ok(self.clone()),
 			TransactionMethod::Confidential(con) => match &con.universal {
-				Some(uni) => uni.clone(),
-				None => rlp::decode(&decrypt(&con.cipher, con.aad)).unwrap(),
+				Some(_) => Ok(self.clone()),
+				None => {
+					// let uni = rlp::decode(&decrypt(&con.cipher, con.aad)?)
+					// 	.map_err(|_| Error::InvalidRlpDecode)?;
+					let c = ConfidentialTransaction {
+						cipher: con.cipher.clone(),
+						aad: con.aad,
+						universal: Some(
+							rlp::decode(&decrypt(&con.cipher, con.aad)?)
+								.map_err(|_| Error::InvalidRlpDecode)?,
+						),
+					};
+
+					Ok(Self {
+						chain_id: self.chain_id,
+						nonce: self.nonce,
+						method: TransactionMethod::Confidential(c),
+						odd_y_parity: self.odd_y_parity,
+						r: self.r,
+						s: self.s,
+					})
+				}
 			},
 		}
 	}
@@ -830,12 +862,12 @@ impl TransactionV2 {
 		}
 	}
 
-	pub fn to_confidential<F>(&self, encrypte: F) -> Self
+	pub fn encrypt<F>(&self, encrypte: F) -> Self
 	where
 		F: FnOnce(&[u8], H256) -> Bytes,
 	{
 		match self {
-			TransactionV2::EIP1559(t) => TransactionV2::EIP1559(t.to_confidential(encrypte)),
+			TransactionV2::EIP1559(t) => TransactionV2::EIP1559(t.encrypt(encrypte)),
 			TransactionV2::EIP2930(t) => TransactionV2::EIP2930(t.clone()),
 			TransactionV2::Legacy(t) => TransactionV2::Legacy(t.clone()),
 		}
@@ -846,6 +878,50 @@ impl TransactionV2 {
 			TransactionV2::EIP1559(t) => t.is_universal(),
 			_ => true,
 		}
+	}
+
+	pub fn decrypt<F>(&self, decrypted: F) -> Result<Self, Error>
+	where
+		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
+	{
+		match self {
+			Self::EIP1559(tx) => {
+				let eip = tx.decrypt(decrypted)?;
+				Ok(Self::EIP1559(eip))
+			}
+			_ => Ok(self.clone()),
+		}
+	}
+
+	pub fn recover_public_key<F, E>(&self, ecdsa_recover: F) -> Result<[u8; 64], E>
+	where
+		F: FnOnce(&[u8; 65], &[u8; 32]) -> Result<[u8; 64], E>,
+	{
+		let mut sig = [0u8; 65];
+		let mut msg = [0u8; 32];
+
+		match self {
+			Self::EIP1559(tx) => {
+				sig[0..32].copy_from_slice(&tx.r[..]);
+				sig[32..64].copy_from_slice(&tx.s[..]);
+				sig[64] = tx.odd_y_parity as u8;
+				msg.copy_from_slice(&EIP1559TransactionMessage::from(tx.clone()).hash()[..]);
+			}
+			Self::EIP2930(tx) => {
+				sig[0..32].copy_from_slice(&tx.r[..]);
+				sig[32..64].copy_from_slice(&tx.s[..]);
+				sig[64] = tx.odd_y_parity as u8;
+				msg.copy_from_slice(&EIP2930TransactionMessage::from(tx.clone()).hash()[..]);
+			}
+			Self::Legacy(tx) => {
+				sig[0..32].copy_from_slice(&tx.signature.r()[..]);
+				sig[32..64].copy_from_slice(&tx.signature.s()[..]);
+				sig[64] = tx.signature.standard_v();
+				msg.copy_from_slice(&LegacyTransactionMessage::from(tx.clone()).hash()[..]);
+			}
+		}
+
+		ecdsa_recover(&sig, &msg)
 	}
 }
 
@@ -922,7 +998,7 @@ pub type TransactionAny = TransactionV2;
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::util::{decrypt, encrypt, recover_signer};
+	use crate::util::{decrypt, encrypt, recover_signer, secp256k1_ecdsa_recover};
 	use hex_literal::hex;
 
 	#[test]
@@ -1054,7 +1130,7 @@ mod tests {
 			r: hex!("eaab5690479f5baf19083128079eeb0ee1a37cf759fac918f5db6497c765cb40").into(),
 			s: hex!("0ee31ec7a954e49e63af2dafdfc975c41cc51c64d65f29b1db793025bbf8e6b9").into(),
 		});
-		let pubkey = recover_signer(&tx);
+		let pubkey = tx.recover_public_key(secp256k1_ecdsa_recover).unwrap();
 		let from = Address::from(H256::from_slice(Keccak256::digest(&pubkey).as_slice()));
 		assert_eq!(
 			from,
@@ -1063,7 +1139,7 @@ mod tests {
 		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
 
 		let confidential =
-			tx.to_confidential(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()));
+			tx.encrypt(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()).unwrap());
 
 		assert!(!confidential.is_universal());
 
@@ -1073,7 +1149,11 @@ mod tests {
 		}
 		.unwrap();
 
-		let tx_confidential = match confidential.clone() {
+		let decrypted_confidential = confidential
+			.decrypt(|msg, aad| decrypt(&key, &pubkey, aad, msg, aad.as_bytes()))
+			.unwrap();
+
+		let tx_confidential = match decrypted_confidential {
 			TransactionV2::EIP1559(tx) => Some(tx),
 			_ => None,
 		}
@@ -1094,9 +1174,11 @@ mod tests {
 
 		assert_eq!(
 			tx.universal_transaction().unwrap(),
-			tx_confidential.universal_transaction_with_decrypt(|msg, aad| {
-				decrypt(&key, &pubkey, aad, msg, aad.as_bytes())
-			})
+			tx_confidential
+				.decrypt(|msg, aad| { decrypt(&key, &pubkey, aad, msg, aad.as_bytes()) })
+				.unwrap()
+				.universal_transaction()
+				.unwrap()
 		);
 	}
 }
