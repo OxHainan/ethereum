@@ -340,6 +340,19 @@ impl LegacyTransaction {
 	pub fn hash(&self) -> H256 {
 		H256::from_slice(Keccak256::digest(&rlp::encode(self)).as_slice())
 	}
+
+	fn essentials(&self) -> TransactionEssentials {
+		TransactionEssentials {
+			input: self.input.clone(),
+			value: self.value,
+			gas_limit: self.gas_limit,
+			max_fee_per_gas: Some(self.gas_price),
+			max_priority_fee_per_gas: Some(self.gas_price),
+			nonce: Some(self.nonce),
+			action: self.action,
+			access_list: Vec::new(),
+		}
+	}
 }
 
 impl Encodable for LegacyTransaction {
@@ -417,6 +430,23 @@ impl EIP2930Transaction {
 		out[1..].copy_from_slice(&encoded);
 		H256::from_slice(Keccak256::digest(&out).as_slice())
 	}
+
+	fn essentials(&self) -> TransactionEssentials {
+		TransactionEssentials {
+			input: self.input.clone(),
+			value: self.value,
+			gas_limit: self.gas_limit,
+			max_fee_per_gas: Some(self.gas_price),
+			max_priority_fee_per_gas: Some(self.gas_price),
+			nonce: Some(self.nonce),
+			action: self.action,
+			access_list: self
+				.access_list
+				.iter()
+				.map(|item| (item.address, item.storage_keys.clone()))
+				.collect(),
+		}
+	}
 }
 
 impl Encodable for EIP2930Transaction {
@@ -466,7 +496,7 @@ impl Decodable for EIP2930Transaction {
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EIP1559TransactionMessage {
 	pub chain_id: u64,
 	pub nonce: U256,
@@ -477,28 +507,28 @@ pub struct EIP1559TransactionMessage {
 	pub value: U256,
 	pub input: Bytes,
 	pub access_list: Vec<AccessListItem>,
+	pub aad: Option<H256>,
 }
 
 impl From<EIP1559Transaction> for EIP1559TransactionMessage {
 	fn from(t: EIP1559Transaction) -> Self {
-		let uni = match t.method {
-			TransactionMethod::Confidential(con) => match con.universal {
-				Some(uni) => uni,
-				None => Default::default(),
+		match t.method {
+			TransactionMethod::Confidential(con) => Self {
+				aad: Some(con.aad),
+				..Default::default()
 			},
-			TransactionMethod::Universal(uni) => uni,
-		};
-
-		Self {
-			chain_id: t.chain_id,
-			nonce: t.nonce,
-			max_priority_fee_per_gas: uni.max_priority_fee_per_gas,
-			max_fee_per_gas: uni.max_fee_per_gas,
-			gas_limit: uni.gas_limit,
-			action: uni.action,
-			value: uni.value,
-			input: uni.input,
-			access_list: uni.access_list,
+			TransactionMethod::Universal(uni) => Self {
+				chain_id: t.chain_id,
+				nonce: t.nonce,
+				max_priority_fee_per_gas: uni.max_priority_fee_per_gas,
+				max_fee_per_gas: uni.max_fee_per_gas,
+				gas_limit: uni.gas_limit,
+				action: uni.action,
+				value: uni.value,
+				input: uni.input,
+				access_list: uni.access_list,
+				..Default::default()
+			},
 		}
 	}
 }
@@ -520,6 +550,10 @@ impl Encodable for EIP1559TransactionMessage {
 
 impl EIP1559TransactionMessage {
 	pub fn hash(&self) -> H256 {
+		if let Some(aad) = self.aad {
+			return aad;
+		}
+
 		let encoded = rlp::encode(self);
 		let mut out = alloc::vec![0; 1 + encoded.len()];
 		out[0] = 2;
@@ -528,8 +562,19 @@ impl EIP1559TransactionMessage {
 	}
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct TransactionEssentials {
+	pub input: Bytes,
+	pub value: U256,
+	pub gas_limit: U256,
+	pub max_fee_per_gas: Option<U256>,
+	pub max_priority_fee_per_gas: Option<U256>,
+	pub nonce: Option<U256>,
+	pub action: TransactionAction,
+	pub access_list: Vec<(H160, Vec<H256>)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
 #[cfg_attr(
 	feature = "with-codec",
 	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
@@ -568,7 +613,34 @@ impl From<EIP1559TransactionMessage> for UniversalTransaction {
 pub struct ConfidentialTransaction {
 	pub cipher: Bytes,
 	pub aad: H256,
-	pub universal: Option<UniversalTransaction>,
+	pub action: TransactionAction,
+	pub max_priority_fee_per_gas: U256,
+	pub max_fee_per_gas: U256,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
+#[cfg_attr(
+	feature = "with-codec",
+	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+)]
+#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ConfidentialParams {
+	pub gas_limit: U256,
+	pub value: U256,
+	pub input: Bytes,
+	pub access_list: Vec<AccessListItem>,
+}
+
+impl From<UniversalTransaction> for ConfidentialParams {
+	fn from(t: UniversalTransaction) -> Self {
+		Self {
+			gas_limit: t.gas_limit,
+			value: t.value,
+			input: t.input,
+			access_list: t.access_list,
+		}
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -581,6 +653,7 @@ pub enum Error {
 	BadSecretKey,
 	/// Invalid  public key
 	BadPublicKey,
+	NotDecryptedTransaction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -628,9 +701,14 @@ impl EIP1559Transaction {
 
 		EIP1559Transaction {
 			method: TransactionMethod::Confidential(ConfidentialTransaction {
-				cipher: encrypte(&rlp::encode(&universal), signed_hash),
 				aad: signed_hash,
-				universal: None,
+				action: universal.action,
+				max_fee_per_gas: universal.max_fee_per_gas,
+				max_priority_fee_per_gas: universal.max_priority_fee_per_gas,
+				cipher: encrypte(
+					&rlp::encode::<ConfidentialParams>(&universal.into()),
+					signed_hash,
+				),
 			}),
 			chain_id: self.chain_id,
 			nonce: self.nonce,
@@ -640,44 +718,63 @@ impl EIP1559Transaction {
 		}
 	}
 
-	pub fn universal_transaction(&self) -> Option<UniversalTransaction> {
+	fn essentials(&self) -> Result<TransactionEssentials, Error> {
 		match &self.method {
-			TransactionMethod::Confidential(con) => con.universal.clone(),
-			TransactionMethod::Universal(uni) => Some(uni.clone()),
+			TransactionMethod::Universal(uni) => Ok(TransactionEssentials {
+				nonce: Some(self.nonce),
+				input: uni.input.clone(),
+				max_fee_per_gas: Some(uni.max_fee_per_gas),
+				max_priority_fee_per_gas: Some(uni.max_priority_fee_per_gas),
+				value: uni.value,
+				gas_limit: uni.gas_limit,
+				action: uni.action,
+				access_list: uni
+					.access_list
+					.iter()
+					.map(|item| (item.address, item.storage_keys.clone()))
+					.collect(),
+			}),
+			_ => Err(Error::NotDecryptedTransaction),
 		}
 	}
 
-	pub fn decrypt<F>(&self, decrypt: F) -> Result<Self, Error>
+	fn essentials_with_decrypt<F>(&self, decrypt: F) -> Result<TransactionEssentials, Error>
 	where
 		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
-		match &self.method {
-			TransactionMethod::Universal(_) => Ok(self.clone()),
-			TransactionMethod::Confidential(con) => match &con.universal {
-				Some(_) => Ok(self.clone()),
-				None => {
-					// let uni = rlp::decode(&decrypt(&con.cipher, con.aad)?)
-					// 	.map_err(|_| Error::InvalidRlpDecode)?;
-					let c = ConfidentialTransaction {
-						cipher: con.cipher.clone(),
-						aad: con.aad,
-						universal: Some(
-							rlp::decode(&decrypt(&con.cipher, con.aad)?)
-								.map_err(|_| Error::InvalidRlpDecode)?,
-						),
-					};
-
-					Ok(Self {
-						chain_id: self.chain_id,
-						nonce: self.nonce,
-						method: TransactionMethod::Confidential(c),
-						odd_y_parity: self.odd_y_parity,
-						r: self.r,
-						s: self.s,
-					})
+		let uni = match &self.method {
+			TransactionMethod::Universal(uni) => uni.clone(),
+			TransactionMethod::Confidential(con) => {
+				let confident = rlp::decode::<ConfidentialParams>(
+					&decrypt(&con.cipher, con.aad).map_err(|_| Error::BadDecrypte)?,
+				)
+				.map_err(|_| Error::InvalidRlpDecode)?;
+				UniversalTransaction {
+					max_fee_per_gas: con.max_fee_per_gas,
+					max_priority_fee_per_gas: con.max_priority_fee_per_gas,
+					action: con.action,
+					value: confident.value,
+					input: confident.input,
+					gas_limit: confident.gas_limit,
+					access_list: confident.access_list,
 				}
-			},
-		}
+			}
+		};
+
+		Ok(TransactionEssentials {
+			nonce: Some(self.nonce),
+			input: uni.input,
+			max_fee_per_gas: Some(uni.max_fee_per_gas),
+			max_priority_fee_per_gas: Some(uni.max_priority_fee_per_gas),
+			value: uni.value,
+			gas_limit: uni.gas_limit,
+			action: uni.action,
+			access_list: uni
+				.access_list
+				.iter()
+				.map(|item| (item.address, item.storage_keys.clone()))
+				.collect(),
+		})
 	}
 
 	pub fn is_universal(&self) -> bool {
@@ -691,7 +788,7 @@ impl EIP1559Transaction {
 impl Encodable for EIP1559Transaction {
 	fn rlp_append(&self, s: &mut rlp::RlpStream) {
 		match self.method {
-			TransactionMethod::Confidential(_) => s.begin_list(7),
+			TransactionMethod::Confidential(_) => s.begin_list(10),
 			TransactionMethod::Universal(_) => s.begin_list(12),
 		};
 
@@ -708,8 +805,11 @@ impl Encodable for EIP1559Transaction {
 				s.append_list(&uni.access_list);
 			}
 			TransactionMethod::Confidential(con) => {
-				s.append(&con.cipher);
+				s.append(&con.max_priority_fee_per_gas);
+				s.append(&con.max_fee_per_gas);
+				s.append(&con.action);
 				s.append(&con.aad);
+				s.append(&con.cipher);
 			}
 		};
 
@@ -734,13 +834,15 @@ impl Decodable for EIP1559Transaction {
 				}),
 				12,
 			),
-			7 => (
+			10 => (
 				TransactionMethod::Confidential(ConfidentialTransaction {
-					cipher: rlp.val_at(2)?,
-					aad: rlp.val_at(3)?,
-					universal: None,
+					max_priority_fee_per_gas: rlp.val_at(2)?,
+					max_fee_per_gas: rlp.val_at(3)?,
+					action: rlp.val_at(4)?,
+					aad: rlp.val_at(5)?,
+					cipher: rlp.val_at(6)?,
 				}),
-				7,
+				10,
 			),
 			_ => return Err(rlp::DecoderError::RlpIncorrectListLen),
 		};
@@ -880,16 +982,22 @@ impl TransactionV2 {
 		}
 	}
 
-	pub fn decrypt<F>(&self, decrypted: F) -> Result<Self, Error>
+	pub fn essentials(&self) -> Result<TransactionEssentials, Error> {
+		match self {
+			Self::EIP1559(tx) => Ok(tx.essentials()?),
+			Self::EIP2930(tx) => Ok(tx.essentials()),
+			Self::Legacy(tx) => Ok(tx.essentials()),
+		}
+	}
+
+	pub fn essentials_with_decrypt<F>(&self, decrypted: F) -> Result<TransactionEssentials, Error>
 	where
 		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
 		match self {
-			Self::EIP1559(tx) => {
-				let eip = tx.decrypt(decrypted)?;
-				Ok(Self::EIP1559(eip))
-			}
-			_ => Ok(self.clone()),
+			Self::EIP1559(tx) => Ok(tx.essentials_with_decrypt(decrypted)?),
+			Self::EIP2930(tx) => Ok(tx.essentials()),
+			Self::Legacy(tx) => Ok(tx.essentials()),
 		}
 	}
 
@@ -1143,42 +1251,29 @@ mod tests {
 
 		assert!(!confidential.is_universal());
 
-		let tx = match tx {
-			TransactionV2::EIP1559(tx) => Some(tx),
-			_ => None,
-		}
-		.unwrap();
-
 		let decrypted_confidential = confidential
-			.decrypt(|msg, aad| decrypt(&key, &pubkey, aad, msg, aad.as_bytes()))
+			.essentials_with_decrypt(|msg, aad| decrypt(&key, &pubkey, aad, msg, aad.as_bytes()))
 			.unwrap();
 
-		let tx_confidential = match decrypted_confidential {
-			TransactionV2::EIP1559(tx) => Some(tx),
-			_ => None,
-		}
-		.unwrap();
-		assert_eq!(
-			tx.universal_transaction(),
-			tx_confidential.universal_transaction()
-		);
+		assert_eq!(tx.essentials().unwrap(), decrypted_confidential);
 
 		let decoded_confidential: TransactionV2 =
 			TransactionV2::decode(&TransactionV2::encode(&confidential)).unwrap();
 
-		let tx_confidential = match decoded_confidential {
-			TransactionV2::EIP1559(tx) => Some(tx),
-			_ => None,
-		}
-		.unwrap();
-
 		assert_eq!(
-			tx.universal_transaction().unwrap(),
-			tx_confidential
-				.decrypt(|msg, aad| { decrypt(&key, &pubkey, aad, msg, aad.as_bytes()) })
-				.unwrap()
-				.universal_transaction()
+			tx.essentials().unwrap(),
+			decoded_confidential
+				.essentials_with_decrypt(|msg, aad| decrypt(
+					&key,
+					&pubkey,
+					aad,
+					msg,
+					aad.as_bytes()
+				))
 				.unwrap()
 		);
+
+		println!("message {:?}", recover_signer(&tx));
+		println!("message {:?}", recover_signer(&decoded_confidential));
 	}
 }
