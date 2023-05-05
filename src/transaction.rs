@@ -613,6 +613,7 @@ impl From<EIP1559TransactionMessage> for UniversalTransaction {
 pub struct ConfidentialTransaction {
 	pub cipher: Bytes,
 	pub aad: H256,
+	pub gas_limit: U256,
 	pub action: TransactionAction,
 	pub max_priority_fee_per_gas: U256,
 	pub max_fee_per_gas: U256,
@@ -626,7 +627,6 @@ pub struct ConfidentialTransaction {
 )]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConfidentialParams {
-	pub gas_limit: U256,
 	pub value: U256,
 	pub input: Bytes,
 	pub access_list: Vec<AccessListItem>,
@@ -635,7 +635,6 @@ pub struct ConfidentialParams {
 impl From<UniversalTransaction> for ConfidentialParams {
 	fn from(t: UniversalTransaction) -> Self {
 		Self {
-			gas_limit: t.gas_limit,
 			value: t.value,
 			input: t.input,
 			access_list: t.access_list,
@@ -703,6 +702,7 @@ impl EIP1559Transaction {
 			method: TransactionMethod::Confidential(ConfidentialTransaction {
 				aad: signed_hash,
 				action: universal.action,
+				gas_limit: universal.gas_limit,
 				max_fee_per_gas: universal.max_fee_per_gas,
 				max_priority_fee_per_gas: universal.max_priority_fee_per_gas,
 				cipher: encrypte(
@@ -752,10 +752,10 @@ impl EIP1559Transaction {
 				UniversalTransaction {
 					max_fee_per_gas: con.max_fee_per_gas,
 					max_priority_fee_per_gas: con.max_priority_fee_per_gas,
+					gas_limit: con.gas_limit,
 					action: con.action,
 					value: confident.value,
 					input: confident.input,
-					gas_limit: confident.gas_limit,
 					access_list: confident.access_list,
 				}
 			}
@@ -807,6 +807,7 @@ impl Encodable for EIP1559Transaction {
 			TransactionMethod::Confidential(con) => {
 				s.append(&con.max_priority_fee_per_gas);
 				s.append(&con.max_fee_per_gas);
+				s.append(&con.gas_limit);
 				s.append(&con.action);
 				s.append(&con.aad);
 				s.append(&con.cipher);
@@ -834,15 +835,16 @@ impl Decodable for EIP1559Transaction {
 				}),
 				12,
 			),
-			10 => (
+			11 => (
 				TransactionMethod::Confidential(ConfidentialTransaction {
 					max_priority_fee_per_gas: rlp.val_at(2)?,
 					max_fee_per_gas: rlp.val_at(3)?,
-					action: rlp.val_at(4)?,
-					aad: rlp.val_at(5)?,
-					cipher: rlp.val_at(6)?,
+					gas_limit: rlp.val_at(4)?,
+					action: rlp.val_at(5)?,
+					aad: rlp.val_at(6)?,
+					cipher: rlp.val_at(7)?,
 				}),
-				10,
+				11,
 			),
 			_ => return Err(rlp::DecoderError::RlpIncorrectListLen),
 		};
@@ -1273,7 +1275,6 @@ mod tests {
 				.unwrap()
 		);
 
-		println!("message {:?}", recover_signer(&tx));
-		println!("message {:?}", recover_signer(&decoded_confidential));
+		assert_eq!(recover_signer(&decoded_confidential), recover_signer(&tx));
 	}
 }
