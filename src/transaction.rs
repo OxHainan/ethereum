@@ -346,8 +346,9 @@ impl LegacyTransaction {
 			input: self.input.clone(),
 			value: self.value,
 			gas_limit: self.gas_limit,
-			max_fee_per_gas: Some(self.gas_price),
-			max_priority_fee_per_gas: Some(self.gas_price),
+			gas_price: Some(self.gas_price),
+			max_fee_per_gas: None,
+			max_priority_fee_per_gas: None,
 			nonce: Some(self.nonce),
 			action: self.action,
 			access_list: Vec::new(),
@@ -436,8 +437,9 @@ impl EIP2930Transaction {
 			input: self.input.clone(),
 			value: self.value,
 			gas_limit: self.gas_limit,
-			max_fee_per_gas: Some(self.gas_price),
-			max_priority_fee_per_gas: Some(self.gas_price),
+			gas_price: Some(self.gas_price),
+			max_fee_per_gas: None,
+			max_priority_fee_per_gas: None,
 			nonce: Some(self.nonce),
 			action: self.action,
 			access_list: self
@@ -567,6 +569,7 @@ pub struct TransactionEssentials {
 	pub input: Bytes,
 	pub value: U256,
 	pub gas_limit: U256,
+	pub gas_price: Option<U256>,
 	pub max_fee_per_gas: Option<U256>,
 	pub max_priority_fee_per_gas: Option<U256>,
 	pub nonce: Option<U256>,
@@ -718,11 +721,39 @@ impl EIP1559Transaction {
 		}
 	}
 
+	pub fn gas_limit(&self) -> U256 {
+		match &self.method {
+			TransactionMethod::Confidential(con) => con.gas_limit,
+			TransactionMethod::Universal(uni) => uni.gas_limit,
+		}
+	}
+
+	pub fn max_priority_fee_per_gas(&self) -> U256 {
+		match &self.method {
+			TransactionMethod::Confidential(con) => con.max_priority_fee_per_gas,
+			TransactionMethod::Universal(uni) => uni.max_priority_fee_per_gas,
+		}
+	}
+
+	pub fn max_fee_per_gas(&self) -> U256 {
+		match &self.method {
+			TransactionMethod::Confidential(con) => con.max_fee_per_gas,
+			TransactionMethod::Universal(uni) => uni.max_fee_per_gas,
+		}
+	}
+
+	pub fn action(&self) -> TransactionAction {
+		match &self.method {
+			TransactionMethod::Confidential(con) => con.action,
+			TransactionMethod::Universal(uni) => uni.action,
+		}
+	}
 	fn essentials(&self) -> Result<TransactionEssentials, Error> {
 		match &self.method {
 			TransactionMethod::Universal(uni) => Ok(TransactionEssentials {
 				nonce: Some(self.nonce),
 				input: uni.input.clone(),
+				gas_price: None,
 				max_fee_per_gas: Some(uni.max_fee_per_gas),
 				max_priority_fee_per_gas: Some(uni.max_priority_fee_per_gas),
 				value: uni.value,
@@ -764,6 +795,7 @@ impl EIP1559Transaction {
 		Ok(TransactionEssentials {
 			nonce: Some(self.nonce),
 			input: uni.input,
+			gas_price: None,
 			max_fee_per_gas: Some(uni.max_fee_per_gas),
 			max_priority_fee_per_gas: Some(uni.max_priority_fee_per_gas),
 			value: uni.value,
@@ -981,6 +1013,22 @@ impl TransactionV2 {
 		match self {
 			TransactionV2::EIP1559(t) => t.is_universal(),
 			_ => true,
+		}
+	}
+
+	pub fn gas_limit(&self) -> U256 {
+		match self {
+			Self::Legacy(tx) => tx.gas_limit,
+			Self::EIP2930(tx) => tx.gas_limit,
+			Self::EIP1559(tx) => tx.gas_limit(),
+		}
+	}
+
+	pub fn chain_id(&self) -> Option<u64> {
+		match self {
+			Self::Legacy(tx) => tx.signature.chain_id(),
+			Self::EIP2930(tx) => Some(tx.chain_id),
+			Self::EIP1559(tx) => Some(tx.chain_id),
 		}
 	}
 
