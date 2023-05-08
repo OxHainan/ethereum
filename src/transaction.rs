@@ -693,15 +693,15 @@ impl EIP1559Transaction {
 		H256::from_slice(Keccak256::digest(&out).as_slice())
 	}
 
-	pub fn encrypt<F>(&self, encrypte: F) -> Self
+	pub fn encrypt<F>(&self, encrypte: F) -> Result<Self, Error>
 	where
-		F: FnOnce(&[u8], H256) -> Bytes,
+		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
 		let message = EIP1559TransactionMessage::from(self.clone());
 		let signed_hash = message.hash();
 		let universal = UniversalTransaction::from(message);
 
-		EIP1559Transaction {
+		Ok(EIP1559Transaction {
 			method: TransactionMethod::Confidential(ConfidentialTransaction {
 				aad: signed_hash,
 				action: universal.action,
@@ -711,14 +711,14 @@ impl EIP1559Transaction {
 				cipher: encrypte(
 					&rlp::encode::<ConfidentialParams>(&universal.into()),
 					signed_hash,
-				),
+				)?,
 			}),
 			chain_id: self.chain_id,
 			nonce: self.nonce,
 			odd_y_parity: self.odd_y_parity,
 			r: self.r,
 			s: self.s,
-		}
+		})
 	}
 
 	pub fn gas_limit(&self) -> U256 {
@@ -998,14 +998,14 @@ impl TransactionV2 {
 		}
 	}
 
-	pub fn encrypt<F>(&self, encrypte: F) -> Self
+	pub fn encrypt<F>(&self, encrypte: F) -> Result<Self, Error>
 	where
-		F: FnOnce(&[u8], H256) -> Bytes,
+		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
 		match self {
-			TransactionV2::EIP1559(t) => TransactionV2::EIP1559(t.encrypt(encrypte)),
-			TransactionV2::EIP2930(t) => TransactionV2::EIP2930(t.clone()),
-			TransactionV2::Legacy(t) => TransactionV2::Legacy(t.clone()),
+			TransactionV2::EIP1559(t) => Ok(TransactionV2::EIP1559(t.encrypt(encrypte)?)),
+			TransactionV2::EIP2930(t) => Ok(TransactionV2::EIP2930(t.clone())),
+			TransactionV2::Legacy(t) => Ok(TransactionV2::Legacy(t.clone())),
 		}
 	}
 
@@ -1296,8 +1296,11 @@ mod tests {
 		);
 		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
 
-		let confidential =
-			tx.encrypt(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()).unwrap());
+		let confidential = tx
+			.encrypt(|msg, aad| {
+				encrypt(&key, &pubkey, aad, msg, aad.as_bytes()).map_err(|_| Error::BadEncrypte)
+			})
+			.unwrap();
 
 		assert!(!confidential.is_universal());
 
