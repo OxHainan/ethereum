@@ -748,6 +748,7 @@ impl EIP1559Transaction {
 			TransactionMethod::Universal(uni) => uni.action,
 		}
 	}
+
 	fn essentials(&self) -> Result<TransactionEssentials, Error> {
 		match &self.method {
 			TransactionMethod::Universal(uni) => Ok(TransactionEssentials {
@@ -1024,6 +1025,14 @@ impl TransactionV2 {
 		}
 	}
 
+	pub fn action(&self) -> TransactionAction {
+		match self {
+			Self::Legacy(tx) => tx.action,
+			Self::EIP2930(tx) => tx.action,
+			Self::EIP1559(tx) => tx.action(),
+		}
+	}
+
 	pub fn chain_id(&self) -> Option<u64> {
 		match self {
 			Self::Legacy(tx) => tx.signature.chain_id(),
@@ -1296,11 +1305,8 @@ mod tests {
 		);
 		let key = hex!("5edcc541b4741c5cc6dd347c5ed9577ef293a62787b4510465fadbfe39ee4094");
 
-		let confidential = tx
-			.encrypt(|msg, aad| {
-				encrypt(&key, &pubkey, aad, msg, aad.as_bytes()).map_err(|_| Error::BadEncrypte)
-			})
-			.unwrap();
+		let confidential =
+			tx.encrypt(|msg, aad| encrypt(&key, &pubkey, aad, msg, aad.as_bytes()).unwrap());
 
 		assert!(!confidential.is_universal());
 
