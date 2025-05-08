@@ -187,7 +187,7 @@ impl TransactionV2 {
 		F: FnOnce(&[u8], H256) -> Result<Bytes, Error>,
 	{
 		match self {
-			Self::EIP1559(tx) => Ok(tx.essentials_with_decrypt(decrypted)?),
+			Self::EIP1559(tx) => tx.essentials_with_decrypt(decrypted),
 			Self::EIP2930(tx) => Ok(tx.essentials()),
 			Self::Legacy(tx) => Ok(tx.essentials()),
 		}
@@ -428,7 +428,7 @@ mod tests {
 					hex!("aad03e7b72eb75ef0771daa9fc5cf380176441c2").into(),
 				),
 				value: 100000000000000000000_u128.into(),
-				input: Default::default(),
+				input:  Default::default(),
 				access_list: Default::default(),
 			}),
 			odd_y_parity: false,

@@ -7,6 +7,8 @@ use crate::{
 	Bytes, Error,
 };
 
+use super::AccessListItem;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
 	feature = "with-scale",
@@ -246,6 +248,7 @@ impl EIP1559Transaction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
 #[cfg_attr(
 	feature = "with-scale",
 	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
@@ -254,28 +257,8 @@ impl EIP1559Transaction {
 pub struct ConfidentialParams {
 	pub value: U256,
 	pub input: Bytes,
-	pub access_list: AccessList,
+	pub access_list: Vec<AccessListItem>,
 }
-
-impl rlp::Encodable for ConfidentialParams {
-	fn rlp_append(&self, s: &mut RlpStream) {
-		s.begin_list(3);
-		s.append(&self.value);
-		s.append(&self.input);
-		s.append_list(&self.access_list);
-	}
-}
-
-impl rlp::Decodable for ConfidentialParams {
-	fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
-		Ok(Self {
-			value: rlp.val_at(0)?,
-			input: rlp.list_at(1)?,
-			access_list: rlp.list_at(2)?,
-		})
-	}
-}
-
 
 impl rlp::Encodable for EIP1559Transaction {
 	fn rlp_append(&self, s: &mut RlpStream) {
