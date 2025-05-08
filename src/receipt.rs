@@ -1,14 +1,19 @@
-use crate::{EnvelopedDecodable, EnvelopedDecoderError, EnvelopedEncodable, Log};
 use alloc::vec::Vec;
+
 use bytes::BytesMut;
 use ethereum_types::{Bloom, H256, U256};
 use rlp::{Decodable, DecoderError, Rlp};
 
+use crate::{
+	enveloped::{EnvelopedDecodable, EnvelopedDecoderError, EnvelopedEncodable},
+	log::Log,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
 #[cfg_attr(
-	feature = "with-codec",
-	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+	feature = "with-scale",
+	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
 )]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrontierReceiptData {
@@ -21,8 +26,8 @@ pub struct FrontierReceiptData {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[derive(rlp::RlpEncodable, rlp::RlpDecodable)]
 #[cfg_attr(
-	feature = "with-codec",
-	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+	feature = "with-scale",
+	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
 )]
 #[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EIP658ReceiptData {
@@ -76,10 +81,14 @@ impl EnvelopedDecodable for ReceiptV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
-	feature = "with-codec",
-	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+	feature = "with-scale",
+	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
 )]
-#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+	feature = "with-serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(untagged)
+)]
 pub enum ReceiptV2 {
 	/// Legacy receipt type
 	Legacy(EIP658ReceiptData),
@@ -139,10 +148,14 @@ impl From<ReceiptV2> for EIP658ReceiptData {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
-	feature = "with-codec",
-	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+	feature = "with-scale",
+	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
 )]
-#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+	feature = "with-serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(untagged)
+)]
 pub enum ReceiptV3 {
 	/// Legacy receipt type
 	Legacy(EIP658ReceiptData),
@@ -211,10 +224,14 @@ impl From<ReceiptV3> for EIP658ReceiptData {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
-	feature = "with-codec",
-	derive(codec::Encode, codec::Decode, scale_info::TypeInfo)
+	feature = "with-scale",
+	derive(scale_codec::Encode, scale_codec::Decode, scale_info::TypeInfo)
 )]
-#[cfg_attr(feature = "with-serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+	feature = "with-serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(untagged)
+)]
 pub enum ReceiptAny {
 	/// Frontier receipt type
 	Frontier(FrontierReceiptData),
